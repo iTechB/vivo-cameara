@@ -1,0 +1,349 @@
+
+name: VivoCam Pro Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - '.github/workflows/android.yml'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Java Setup
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Gradle Setup
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      - name: Android SDK Setup
+        uses: android-actions/setup-android@v3
+
+      - name: Install Android SDK
+        run: |
+          sdkmanager "platforms;android-35" "build-tools;35.0.0"
+
+      - name: Create Android Project
+        run: |
+          mkdir -p app/src/main/java/com/vivocampro
+          mkdir -p app/src/main/res/values
+
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "VivoCamPro"
+          include(":app")
+          EOF
+
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.7.3" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+          }
+          EOF
+
+          cat > gradle.properties <<'EOF'
+          android.useAndroidX=true
+          org.gradle.jvmargs=-Xmx2048m
+          EOF
+
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+          }
+
+          android {
+              namespace = "com.vivocampro"
+              compileSdk = 35
+
+              defaultConfig {
+                  applicationId = "com.vivocampro"
+                  minSdk = 26
+                  targetSdk = 35
+                  versionCode = 1
+                  versionName = "1.0"
+              }
+          }
+
+          dependencies {
+              implementation("androidx.core:core-ktx:1.15.0")
+              implementation("androidx.appcompat:appcompat:1.7.0")
+              implementation("com.google.android.material:material:1.12.0")
+              implementation("androidx.camera:camera-core:1.4.1")
+              implementation("androidx.camera:camera-camera2:1.4.1")
+              implementation("androidx.camera:camera-lifecycle:1.4.1")
+              implementation("androidx.camera:camera-view:1.4.1")
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-feature android:name="android.hardware.camera.any" android:required="true"/>
+              <uses-permission android:name="android.permission.CAMERA"/>
+              <application
+                  android:theme="@style/AppTheme"
+                  android:label="VivoCam Pro"
+                  android:allowBackup="false">
+                  <activity
+                      android:name=".MainActivity"
+                      android:screenOrientation="portrait"
+                      android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN"/>
+                          <category android:name="android.intent.category.LAUNCHER"/>
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/res/values/styles.xml <<'EOF'
+          <resources>
+              <style name="AppTheme" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+                  <item name="android:fontFamily">sans</item>
+                  <item name="android:colorAccent">#D7B46A</item>
+                  <item name="android:statusBarColor">#080A0F</item>
+                  <item name="android:navigationBarColor">#080A0F</item>
+              </style>
+          </resources>
+          EOF
+
+          cat > app/src/main/java/com/vivocampro/MainActivity.kt <<'EOF'
+          package com.vivocampro
+
+          import android.Manifest
+          import android.content.ContentValues
+          import android.content.pm.PackageManager
+          import android.os.Bundle
+          import android.provider.MediaStore
+          import android.view.Gravity
+          import android.widget.*
+          import androidx.appcompat.app.AppCompatActivity
+          import androidx.camera.core.*
+          import androidx.camera.lifecycle.ProcessCameraProvider
+          import androidx.camera.view.PreviewView
+          import androidx.core.content.ContextCompat
+          import java.text.SimpleDateFormat
+          import java.util.Locale
+
+          class MainActivity : AppCompatActivity() {
+
+              private lateinit var previewView: PreviewView
+              private var camera: Camera? = null
+              private var capture: ImageCapture? = null
+              private var front = false
+              private var flash = false
+              private var maxZoom = 1f
+
+              override fun onCreate(savedInstanceState: Bundle?) {
+                  super.onCreate(savedInstanceState)
+
+                  val root = LinearLayout(this).apply {
+                      orientation = LinearLayout.VERTICAL
+                      setBackgroundColor(0xFF080A0F.toInt())
+                  }
+
+                  previewView = PreviewView(this).apply {
+                      implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                  }
+
+                  root.addView(previewView, LinearLayout.LayoutParams(
+                      -1, 0, 1f
+                  ))
+
+                  val zoom = SeekBar(this).apply {
+                      max = 30
+                  }
+                  root.addView(zoom)
+
+                  val controls = LinearLayout(this).apply {
+                      gravity = Gravity.CENTER
+                      orientation = LinearLayout.HORIZONTAL
+                  }
+
+                  fun addButton(label: String, action: () -> Unit) {
+                      val button = Button(this).apply {
+                          text = label
+                          setOnClickListener { action() }
+                      }
+                      controls.addView(button, LinearLayout.LayoutParams(
+                          0, -2, 1f
+                      ))
+                  }
+
+                  addButton("FLASH") {
+                      flash = !flash
+                      camera?.cameraControl?.enableTorch(flash)
+                      capture?.flashMode = if (flash)
+                          ImageCapture.FLASH_MODE_ON
+                      else ImageCapture.FLASH_MODE_OFF
+                  }
+
+                  addButton("FLIP") {
+                      front = !front
+                      startCamera()
+                  }
+
+                  addButton("CAPTURE") {
+                      takePhoto()
+                  }
+
+                  root.addView(controls)
+                  setContentView(root)
+
+                  zoom.setOnSeekBarChangeListener(
+                      object : SeekBar.OnSeekBarChangeListener {
+                          override fun onProgressChanged(
+                              bar: SeekBar?, progress: Int, user: Boolean
+                          ) {
+                              val ratio = 1f +
+                                  (maxZoom - 1f) * progress / 30f
+                              camera?.cameraControl?.setZoomRatio(ratio)
+                          }
+                          override fun onStartTrackingTouch(bar: SeekBar?) {}
+                          override fun onStopTrackingTouch(bar: SeekBar?) {}
+                      }
+                  )
+
+                  if (ContextCompat.checkSelfPermission(
+                      this, Manifest.permission.CAMERA
+                  ) == PackageManager.PERMISSION_GRANTED) {
+                      startCamera()
+                  } else {
+                      requestPermissions(
+                          arrayOf(Manifest.permission.CAMERA), 101
+                      )
+                  }
+              }
+
+              override fun onRequestPermissionsResult(
+                  requestCode: Int,
+                  permissions: Array<out String>,
+                  results: IntArray
+              ) {
+                  super.onRequestPermissionsResult(
+                      requestCode, permissions, results
+                  )
+                  if (requestCode == 101 &&
+                      results.isNotEmpty() &&
+                      results[0] == PackageManager.PERMISSION_GRANTED
+                  ) startCamera()
+                  else toast("Camera permission required")
+              }
+
+              private fun startCamera() {
+                  val future = ProcessCameraProvider.getInstance(this)
+                  future.addListener({
+                      val provider = future.get()
+                      val selector = if (front)
+                          CameraSelector.DEFAULT_FRONT_CAMERA
+                      else CameraSelector.DEFAULT_BACK_CAMERA
+
+                      if (!provider.hasCamera(selector)) {
+                          toast("Camera unavailable")
+                          return@addListener
+                      }
+
+                      val preview = Preview.Builder().build()
+                      preview.setSurfaceProvider(previewView.surfaceProvider)
+
+                      capture = ImageCapture.Builder()
+                          .setCaptureMode(
+                              ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
+                          )
+                          .build()
+
+                      try {
+                          provider.unbindAll()
+                          camera = provider.bindToLifecycle(
+                              this, selector, preview, capture
+                          )
+                          maxZoom = camera?.cameraInfo
+                              ?.zoomState?.value?.maxZoomRatio ?: 1f
+                      } catch (e: Exception) {
+                          toast("Camera error: ${e.message}")
+                      }
+                  }, ContextCompat.getMainExecutor(this))
+              }
+
+              private fun takePhoto() {
+                  val image = capture ?: return
+                  val filename = "VivoCam_" +
+                      SimpleDateFormat(
+                          "yyyyMMdd_HHmmss", Locale.US
+                      ).format(System.currentTimeMillis()) + ".jpg"
+
+                  val values = ContentValues().apply {
+                      put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                      put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                      put(
+                          MediaStore.Images.Media.RELATIVE_PATH,
+                          "Pictures/VivoCamPro"
+                      )
+                  }
+
+                  val options = ImageCapture.OutputFileOptions.Builder(
+                      contentResolver,
+                      MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                      values
+                  ).build()
+
+                  image.takePicture(
+                      options,
+                      ContextCompat.getMainExecutor(this),
+                      object : ImageCapture.OnImageSavedCallback {
+                          override fun onImageSaved(
+                              result: ImageCapture.OutputFileResults
+                          ) {
+                              toast("Photo saved successfully")
+                          }
+
+                          override fun onError(
+                              error: ImageCaptureException
+                          ) {
+                              toast("Capture failed: ${error.message}")
+                          }
+                      }
+                  )
+              }
+
+              private fun toast(message: String) {
+                  Toast.makeText(
+                      this, message, Toast.LENGTH_SHORT
+                  ).show()
+              }
+          }
+          EOF
+
+      - name: Build APK
+        run: gradle assembleDebug
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: VivoCamPro-APK
+          path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
