@@ -29,8 +29,8 @@ jobs:
           gradle-version: '8.9'
       - name: Install Android SDK
         env:
-          ANDROID_HOME: /usr/local/lib/android/sdk
-          ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+          ANDROID_HOME: /android/sdk
+          ANDROID_SDK_ROOT: /android/sdk
         run: |
           echo "Android SDK: $ANDROID_HOME"
 
