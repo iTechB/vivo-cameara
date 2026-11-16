@@ -7,12 +7,17 @@ on:
     paths:
       - '.github/workflows/android.yml'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     env:
       ANDROID_HOME: /usr/local/lib/android/sdk
       ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -27,34 +32,32 @@ jobs:
         uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '8.9'
-      - uses: android-actions/setup-android@v4
-      - name: Install Android SDK
-        env:
-          ANDROID_HOME: /android/sdk
-          ANDROID_SDK_ROOT: /android/sdk
+
+      - name: Android SDK Setup
+        uses: android-actions/setup-android@v4
+
+      - name: Install Android SDK Packages
         run: |
-          echo "Android SDK: $ANDROID_HOME"
+          echo "ANDROID_HOME=$ANDROID_HOME"
 
-          SDKMANAGER=$(find "$ANDROID_HOME/cmdline-tools" \
-            -type f -name sdkmanager | sort -V | tail -n 1)
+          sdkmanager --version
 
-          if [ -z "$SDKMANAGER" ]; then
-            echo "ERROR: sdkmanager not found"
-            exit 1
-          fi
+          yes | sdkmanager --licenses
 
-          chmod +x "$SDKMANAGER"
-
-          yes | "$SDKMANAGER" --licenses || true
-
-          "$SDKMANAGER" --install \
+          sdkmanager \
+            "platform-tools" \
             "platforms;android-35" \
             "build-tools;35.0.0"
 
+      - name: Verify Android SDK
+        run: |
+          echo "Checking Android SDK..."
 
+          test -d "$ANDROID_HOME/platforms/android-35"
 
+          test -d "$ANDROID_HOME/build-tools/35.0.0"
 
-
+          echo "Android SDK installation successful"
 
       - name: Create Android Project
         run: |
@@ -69,6 +72,7 @@ jobs:
                   gradlePluginPortal()
               }
           }
+
           dependencyResolutionManagement {
               repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
               repositories {
@@ -76,6 +80,7 @@ jobs:
                   mavenCentral()
               }
           }
+
           rootProject.name = "VivoCamPro"
           include(":app")
           EOF
@@ -90,6 +95,7 @@ jobs:
           cat > gradle.properties <<'EOF'
           android.useAndroidX=true
           org.gradle.jvmargs=-Xmx2048m
+          org.gradle.parallel=true
           EOF
 
           cat > app/build.gradle.kts <<'EOF'
@@ -109,12 +115,22 @@ jobs:
                   versionCode = 1
                   versionName = "1.0"
               }
+
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+
+              kotlinOptions {
+                  jvmTarget = "17"
+              }
           }
 
           dependencies {
               implementation("androidx.core:core-ktx:1.15.0")
               implementation("androidx.appcompat:appcompat:1.7.0")
               implementation("com.google.android.material:material:1.12.0")
+
               implementation("androidx.camera:camera-core:1.4.1")
               implementation("androidx.camera:camera-camera2:1.4.1")
               implementation("androidx.camera:camera-lifecycle:1.4.1")
@@ -124,21 +140,30 @@ jobs:
 
           cat > app/src/main/AndroidManifest.xml <<'EOF'
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
-              <uses-feature android:name="android.hardware.camera.any" android:required="true"/>
+
+              <uses-feature
+                  android:name="android.hardware.camera.any"
+                  android:required="true"/>
+
               <uses-permission android:name="android.permission.CAMERA"/>
+
               <application
                   android:theme="@style/AppTheme"
                   android:label="VivoCam Pro"
                   android:allowBackup="false">
+
                   <activity
                       android:name=".MainActivity"
                       android:screenOrientation="portrait"
                       android:exported="true">
+
                       <intent-filter>
                           <action android:name="android.intent.action.MAIN"/>
                           <category android:name="android.intent.category.LAUNCHER"/>
                       </intent-filter>
+
                   </activity>
+
               </application>
           </manifest>
           EOF
@@ -190,16 +215,19 @@ jobs:
                   }
 
                   previewView = PreviewView(this).apply {
-                      implementationMode = PreviewView.ImplementationMode.COMPATIBLE
+                      implementationMode =
+                          PreviewView.ImplementationMode.COMPATIBLE
                   }
 
-                  root.addView(previewView, LinearLayout.LayoutParams(
-                      -1, 0, 1f
-                  ))
+                  root.addView(
+                      previewView,
+                      LinearLayout.LayoutParams(-1, 0, 1f)
+                  )
 
                   val zoom = SeekBar(this).apply {
                       max = 30
                   }
+
                   root.addView(zoom)
 
                   val controls = LinearLayout(this).apply {
@@ -212,21 +240,25 @@ jobs:
                           text = label
                           setOnClickListener { action() }
                       }
-                      controls.addView(button, LinearLayout.LayoutParams(
-                          0, -2, 1f
-                      ))
+
+                      controls.addView(
+                          button,
+                          LinearLayout.LayoutParams(0, -2, 1f)
+                      )
                   }
 
                   addButton("FLASH") {
                       flash = !flash
                       camera?.cameraControl?.enableTorch(flash)
-                      capture?.flashMode = if (flash)
-                          ImageCapture.FLASH_MODE_ON
-                      else ImageCapture.FLASH_MODE_OFF
+
+                      capture?.flashMode =
+                          if (flash) ImageCapture.FLASH_MODE_ON
+                          else ImageCapture.FLASH_MODE_OFF
                   }
 
                   addButton("FLIP") {
                       front = !front
+                      flash = false
                       startCamera()
                   }
 
@@ -239,25 +271,38 @@ jobs:
 
                   zoom.setOnSeekBarChangeListener(
                       object : SeekBar.OnSeekBarChangeListener {
+
                           override fun onProgressChanged(
-                              bar: SeekBar?, progress: Int, user: Boolean
+                              bar: SeekBar?,
+                              progress: Int,
+                              user: Boolean
                           ) {
                               val ratio = 1f +
                                   (maxZoom - 1f) * progress / 30f
+
                               camera?.cameraControl?.setZoomRatio(ratio)
                           }
-                          override fun onStartTrackingTouch(bar: SeekBar?) {}
-                          override fun onStopTrackingTouch(bar: SeekBar?) {}
+
+                          override fun onStartTrackingTouch(
+                              bar: SeekBar?
+                          ) {}
+
+                          override fun onStopTrackingTouch(
+                              bar: SeekBar?
+                          ) {}
                       }
                   )
 
                   if (ContextCompat.checkSelfPermission(
-                      this, Manifest.permission.CAMERA
-                  ) == PackageManager.PERMISSION_GRANTED) {
+                          this,
+                          Manifest.permission.CAMERA
+                      ) == PackageManager.PERMISSION_GRANTED
+                  ) {
                       startCamera()
                   } else {
                       requestPermissions(
-                          arrayOf(Manifest.permission.CAMERA), 101
+                          arrayOf(Manifest.permission.CAMERA),
+                          101
                       )
                   }
               }
@@ -268,22 +313,34 @@ jobs:
                   results: IntArray
               ) {
                   super.onRequestPermissionsResult(
-                      requestCode, permissions, results
+                      requestCode,
+                      permissions,
+                      results
                   )
+
                   if (requestCode == 101 &&
                       results.isNotEmpty() &&
                       results[0] == PackageManager.PERMISSION_GRANTED
-                  ) startCamera()
-                  else toast("Camera permission required")
+                  ) {
+                      startCamera()
+                  } else {
+                      toast("Camera permission required")
+                  }
               }
 
               private fun startCamera() {
-                  val future = ProcessCameraProvider.getInstance(this)
+                  val future =
+                      ProcessCameraProvider.getInstance(this)
+
                   future.addListener({
+
                       val provider = future.get()
-                      val selector = if (front)
+
+                      val selector = if (front) {
                           CameraSelector.DEFAULT_FRONT_CAMERA
-                      else CameraSelector.DEFAULT_BACK_CAMERA
+                      } else {
+                          CameraSelector.DEFAULT_BACK_CAMERA
+                      }
 
                       if (!provider.hasCamera(selector)) {
                           toast("Camera unavailable")
@@ -291,7 +348,10 @@ jobs:
                       }
 
                       val preview = Preview.Builder().build()
-                      preview.setSurfaceProvider(previewView.surfaceProvider)
+
+                      preview.setSurfaceProvider(
+                          previewView.surfaceProvider
+                      )
 
                       capture = ImageCapture.Builder()
                           .setCaptureMode(
@@ -301,43 +361,63 @@ jobs:
 
                       try {
                           provider.unbindAll()
+
                           camera = provider.bindToLifecycle(
-                              this, selector, preview, capture
+                              this,
+                              selector,
+                              preview,
+                              capture
                           )
+
                           maxZoom = camera?.cameraInfo
                               ?.zoomState?.value?.maxZoomRatio ?: 1f
+
                       } catch (e: Exception) {
                           toast("Camera error: ${e.message}")
                       }
+
                   }, ContextCompat.getMainExecutor(this))
               }
 
               private fun takePhoto() {
                   val image = capture ?: return
+
                   val filename = "VivoCam_" +
                       SimpleDateFormat(
-                          "yyyyMMdd_HHmmss", Locale.US
+                          "yyyyMMdd_HHmmss",
+                          Locale.US
                       ).format(System.currentTimeMillis()) + ".jpg"
 
                   val values = ContentValues().apply {
-                      put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
-                      put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                      put(
+                          MediaStore.MediaColumns.DISPLAY_NAME,
+                          filename
+                      )
+
+                      put(
+                          MediaStore.MediaColumns.MIME_TYPE,
+                          "image/jpeg"
+                      )
+
                       put(
                           MediaStore.Images.Media.RELATIVE_PATH,
                           "Pictures/VivoCamPro"
                       )
                   }
 
-                  val options = ImageCapture.OutputFileOptions.Builder(
-                      contentResolver,
-                      MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                      values
-                  ).build()
+                  val options =
+                      ImageCapture.OutputFileOptions.Builder(
+                          contentResolver,
+                          MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                          values
+                      ).build()
 
                   image.takePicture(
                       options,
                       ContextCompat.getMainExecutor(this),
+
                       object : ImageCapture.OnImageSavedCallback {
+
                           override fun onImageSaved(
                               result: ImageCapture.OutputFileResults
                           ) {
@@ -355,7 +435,9 @@ jobs:
 
               private fun toast(message: String) {
                   Toast.makeText(
-                      this, message, Toast.LENGTH_SHORT
+                      this,
+                      message,
+                      Toast.LENGTH_SHORT
                   ).show()
               }
           }
