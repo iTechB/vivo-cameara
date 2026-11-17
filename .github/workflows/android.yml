@@ -400,7 +400,7 @@ jobs:
               private fun takePhoto() {
                   val image = capture ?: return
 
-                  val filename = "VivoCamPro_" +
+                val filename = "VivoCamPro_" +
                       SimpleDateFormat(
                           "yyyyMMdd_HHmmss",
                           Locale.US
@@ -451,7 +451,7 @@ jobs:
           EOF
 
       - name: Build APK
-        runs: gradle assembleDebug
+        run: gradle assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
