@@ -105,8 +105,8 @@ jobs:
                   applicationId = "com.vivocampro"
                   minSdk = 26
                   targetSdk = 35
-                  versionCode = 2
-                  versionName = "2.0"
+                  versionCode = 3
+                  versionName = "3.0"
               }
 
               compileOptions {
@@ -179,9 +179,11 @@ jobs:
           import android.Manifest
           import android.content.ContentValues
           import android.content.pm.PackageManager
+          import android.graphics.Color
           import android.os.Bundle
           import android.provider.MediaStore
           import android.view.Gravity
+          import android.view.View
           import android.widget.*
           import androidx.appcompat.app.AppCompatActivity
           import androidx.camera.core.*
@@ -202,7 +204,7 @@ jobs:
 
               private var front = false
               private var flash = false
-              private var currentMode = ExtensionMode.NONE
+              private var currentMode = ExtensionMode.NONE // NONE, HDR, NIGHT, BOKEH(Portrait)
               private var maxZoom = 1f
 
               override fun onCreate(savedInstanceState: Bundle?) {
@@ -213,37 +215,68 @@ jobs:
                       setBackgroundColor(0xFF080A0F.toInt())
                   }
 
+                  // Camera Preview Container with Grid Overlay layout
+                  val previewContainer = FrameLayout(this)
+
                   previewView = PreviewView(this).apply {
                       implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                   }
+                  previewContainer.addView(previewView, FrameLayout.LayoutParams(-1, -1))
 
-                  root.addView(
-                      previewView,
-                      LinearLayout.LayoutParams(-1, 0, 1f)
-                  )
+                  // DSLR Grid Lines Overlay (Rule of Thirds)
+                  val gridOverlay = View(this).apply {
+                      background = createGridDrawable()
+                  }
+                  previewContainer.addView(gridOverlay, FrameLayout.LayoutParams(-1, -1))
 
-                  val zoom = SeekBar(this).apply {
+                  root.addView(previewContainer, LinearLayout.LayoutParams(-1, 0, 1f))
+
+                  // Control Panel Labels & Sliders
+                  val labelLayout = LinearLayout(this).apply {
+                      orientation = LinearLayout.HORIZONTAL
+                      setPadding(20, 10, 20, 0)
+                  }
+                  val zoomLabel = TextView(this).apply {
+                      text = "ZOOM & EXPOSURE CONTROLS"
+                      setTextColor(Color.parseColor("#D7B46A"))
+                      textSize = 12f
+                  }
+                  labelLayout.addView(zoomLabel)
+                  root.addView(labelLayout)
+
+                  // Zoom Control Slider
+                  val zoomBar = SeekBar(this).apply {
                       max = 50
                       progress = 0
+                      setPadding(30, 10, 30, 10)
                   }
+                  root.addView(zoomBar)
 
-                  root.addView(zoom)
+                  // Exposure Compensation Slider (EV)
+                  val exposureBar = SeekBar(this).apply {
+                      max = 20
+                      progress = 10 // Default middle (0 EV)
+                      setPadding(30, 0, 30, 20)
+                  }
+                  root.addView(exposureBar)
 
+                  // Action Buttons Panel
                   val controls = LinearLayout(this).apply {
                       gravity = Gravity.CENTER
                       orientation = LinearLayout.HORIZONTAL
+                      setPadding(10, 10, 10, 20)
                   }
 
                   fun addButton(label: String, action: () -> Unit) {
                       val button = Button(this).apply {
                           text = label
+                          setTextColor(Color.WHITE)
+                          setBackgroundColor(Color.parseColor("#1F2430"))
                           setOnClickListener { action() }
                       }
-
-                      controls.addView(
-                          button,
-                          LinearLayout.LayoutParams(0, -2, 1f)
-                      )
+                      controls.addView(button, LinearLayout.LayoutParams(0, -2, 1f).apply {
+                          setMargins(5, 0, 5, 0)
+                      })
                   }
 
                   addButton("MODE") {
@@ -272,54 +305,59 @@ jobs:
                   root.addView(controls)
                   setContentView(root)
 
-                  zoom.setOnSeekBarChangeListener(
-                      object : SeekBar.OnSeekBarChangeListener {
-
-                          override fun onProgressChanged(
-                              bar: SeekBar?,
-                              progress: Int,
-                              user: Boolean
-                          ) {
-                              val ratio = 1f +
-                                  (maxZoom - 1f) * (progress.toFloat() / 50f)
-
-                              camera?.cameraControl?.setZoomRatio(ratio)
-                          }
-
-                          override fun onStartTrackingTouch(bar: SeekBar?) {}
-                          override fun onStopTrackingTouch(bar: SeekBar?) {}
+                  // Zoom Listener
+                  zoomBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(bar: SeekBar?, progress: Int, user: Boolean) {
+                          val ratio = 1f + (maxZoom - 1f) * (progress.toFloat() / 50f)
+                          camera?.cameraControl?.setZoomRatio(ratio)
                       }
-                  )
+                      override fun onStartTrackingTouch(bar: SeekBar?) {}
+                      override fun onStopTrackingTouch(bar: SeekBar?) {}
+                  })
 
-                  if (ContextCompat.checkSelfPermission(
-                          this,
-                          Manifest.permission.CAMERA
-                      ) == PackageManager.PERMISSION_GRANTED
-                  ) {
+                  // Exposure Compensation Listener (-2.0 to +2.0 EV range mapping)
+                  exposureBar.setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                      override fun onProgressChanged(bar: SeekBar?, progress: Int, user: Boolean) {
+                          val cameraInfo = camera?.cameraInfo ?: return
+                          val range = cameraInfo.exposureState.exposureCompensationRange
+                          val evIndex = range.lower + (progress.toFloat() / 20f) * (range.upper - range.lower).toInt()
+                          camera?.cameraControl?.setExposureCompensationIndex(evIndex.toInt())
+                      }
+                      override fun onStartTrackingTouch(bar: SeekBar?) {}
+                      override fun onStopTrackingTouch(bar: SeekBar?) {}
+                  })
+
+                  if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
                       startCamera()
                   } else {
-                      requestPermissions(
-                          arrayOf(Manifest.permission.CAMERA),
-                          101
-                      )
+                      requestPermissions(arrayOf(Manifest.permission.CAMERA), 101)
                   }
               }
 
-              override fun onRequestPermissionsResult(
-                  requestCode: Int,
-                  permissions: Array<out String>,
-                  results: IntArray
-              ) {
-                  super.onRequestPermissionsResult(
-                      requestCode,
-                      permissions,
-                      results
-                  )
+              private fun createGridDrawable(): android.graphics.drawable.Drawable {
+                  return object : android.graphics.drawable.Drawable() {
+                      override fun draw(canvas: android.graphics.Canvas) {
+                          val paint = android.graphics.Paint().apply {
+                              color = Color.argb(60, 255, 255, 255)
+                              strokeWidth = 2f
+                          }
+                          val w = bounds.width().toFloat()
+                          val h = bounds.height().toFloat()
+                          // Rule of thirds grid lines
+                          canvas.drawLine(w / 3f, 0f, w / 3f, h, paint)
+                          canvas.drawLine((w * 2f) / 3f, 0f, (w * 2f) / 3f, h, paint)
+                          canvas.drawLine(0f, h / 3f, w, h / 3f, paint)
+                          canvas.drawLine(0f, (h * 2f) / 3f, w, (h * 2f) / 3f, paint)
+                      }
+                      override fun setAlpha(alpha: Int) {}
+                      override fun setColorFilter(colorFilter: android.graphics.ColorFilter?) {}
+                      override fun getOpacity(): Int = android.graphics.PixelFormat.TRANSLUCENT
+                  }
+              }
 
-                  if (requestCode == 101 &&
-                      results.isNotEmpty() &&
-                      results[0] == PackageManager.PERMISSION_GRANTED
-                  ) {
+              override fun onRequestPermissionsResult(requestCode: Int, permissions: Array<out String>, results: IntArray) {
+                  super.onRequestPermissionsResult(requestCode, permissions, results)
+                  if (requestCode == 101 && results.isNotEmpty() && results[0] == PackageManager.PERMISSION_GRANTED) {
                       startCamera()
                   } else {
                       toast("Camera permission required")
@@ -335,6 +373,10 @@ jobs:
                       ExtensionMode.HDR -> {
                           toast("Night Mode Enabled (Low Light Boost)")
                           ExtensionMode.NIGHT
+                      }
+                      ExtensionMode.NIGHT -> {
+                          toast("Portrait / Bokeh Mode Enabled")
+                          ExtensionMode.BOKEH
                       }
                       else -> {
                           toast("Standard Pro Mode")
@@ -356,14 +398,14 @@ jobs:
                           CameraSelector.DEFAULT_BACK_CAMERA
                       }
 
-                      val extensionsManagerFuture =
-                          ExtensionsManager.getInstanceAsync(this, cameraProvider!!)
+                      val extensionsManagerFuture = ExtensionsManager.getInstanceAsync(this, cameraProvider!!)
 
                       extensionsManagerFuture.addListener({
                           val extensionsManager = extensionsManagerFuture.get()
 
-                          val finalSelector = if (extensionsManager.isExtensionAvailable(selector, currentMode)) {
-                              extensionsManager.getExtensionEnabledCameraSelector(selector, currentMode)
+                          val targetMode = if (currentMode == ExtensionMode.BOKEH) ExtensionMode.BOKEH else currentMode
+                          val finalSelector = if (extensionsManager.isExtensionAvailable(selector, targetMode)) {
+                              extensionsManager.getExtensionEnabledCameraSelector(selector, targetMode)
                           } else {
                               selector
                           }
@@ -386,8 +428,7 @@ jobs:
                                   capture
                               )
 
-                              maxZoom = camera?.cameraInfo
-                                  ?.zoomState?.value?.maxZoomRatio ?: 1f
+                              maxZoom = camera?.cameraInfo?.zoomState?.value?.maxZoomRatio ?: 1f
 
                           } catch (e: Exception) {
                               toast("Camera error: ${e.message}")
@@ -400,11 +441,8 @@ jobs:
               private fun takePhoto() {
                   val image = capture ?: return
 
-                val filename = "VivoCamPro_" +
-                      SimpleDateFormat(
-                          "yyyyMMdd_HHmmss",
-                          Locale.US
-                      ).format(System.currentTimeMillis()) + ".jpg"
+                  val filename = "VivoCamPro_" +
+                      SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(System.currentTimeMillis()) + ".jpg"
 
                   val values = ContentValues().apply {
                       put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
@@ -412,28 +450,21 @@ jobs:
                       put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/VivoCamPro")
                   }
 
-                  val options =
-                      ImageCapture.OutputFileOptions.Builder(
-                          contentResolver,
-                          MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
-                          values
-                      ).build()
+                  val options = ImageCapture.OutputFileOptions.Builder(
+                      contentResolver,
+                      MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
+                      values
+                  ).build()
 
                   image.takePicture(
                       options,
                       ContextCompat.getMainExecutor(this),
-
                       object : ImageCapture.OnImageSavedCallback {
-
-                          override fun onImageSaved(
-                              result: ImageCapture.OutputFileResults
-                          ) {
-                              toast("DSLR Quality Photo Saved!")
+                          override fun onImageSaved(result: ImageCapture.OutputFileResults) {
+                              toast("Professional DSLR Photo Saved!")
                           }
 
-                          override fun onError(
-                              error: ImageCaptureException
-                          ) {
+                          override fun onError(error: ImageCaptureException) {
                               toast("Capture failed: ${error.message}")
                           }
                       }
@@ -441,11 +472,7 @@ jobs:
               }
 
               private fun toast(message: String) {
-                  Toast.makeText(
-                      this,
-                      message,
-                      Toast.LENGTH_SHORT
-                  ).show()
+                  Toast.makeText(this, message, Toast.LENGTH_SHORT).show()
               }
           }
           EOF
