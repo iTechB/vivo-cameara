@@ -1,4 +1,3 @@
-
 name: VivoCam Pro Android APK
 
 on:
@@ -39,11 +38,8 @@ jobs:
       - name: Install Android SDK Packages
         run: |
           echo "ANDROID_HOME=$ANDROID_HOME"
-
           sdkmanager --version
-
           yes | sdkmanager --licenses
-
           sdkmanager \
             "platform-tools" \
             "platforms;android-35" \
@@ -52,11 +48,8 @@ jobs:
       - name: Verify Android SDK
         run: |
           echo "Checking Android SDK..."
-
           test -d "$ANDROID_HOME/platforms/android-35"
-
           test -d "$ANDROID_HOME/build-tools/35.0.0"
-
           echo "Android SDK installation successful"
 
       - name: Create Android Project
@@ -112,8 +105,8 @@ jobs:
                   applicationId = "com.vivocampro"
                   minSdk = 26
                   targetSdk = 35
-                  versionCode = 1
-                  versionName = "1.0"
+                  versionCode = 2
+                  versionName = "2.0"
               }
 
               compileOptions {
@@ -135,6 +128,7 @@ jobs:
               implementation("androidx.camera:camera-camera2:1.4.1")
               implementation("androidx.camera:camera-lifecycle:1.4.1")
               implementation("androidx.camera:camera-view:1.4.1")
+              implementation("androidx.camera:camera-extensions:1.4.1")
           }
           EOF
 
@@ -191,6 +185,8 @@ jobs:
           import android.widget.*
           import androidx.appcompat.app.AppCompatActivity
           import androidx.camera.core.*
+          import androidx.camera.extensions.ExtensionMode
+          import androidx.camera.extensions.ExtensionsManager
           import androidx.camera.lifecycle.ProcessCameraProvider
           import androidx.camera.view.PreviewView
           import androidx.core.content.ContextCompat
@@ -202,8 +198,11 @@ jobs:
               private lateinit var previewView: PreviewView
               private var camera: Camera? = null
               private var capture: ImageCapture? = null
+              private var cameraProvider: ProcessCameraProvider? = null
+
               private var front = false
               private var flash = false
+              private var currentMode = ExtensionMode.NONE
               private var maxZoom = 1f
 
               override fun onCreate(savedInstanceState: Bundle?) {
@@ -215,8 +214,7 @@ jobs:
                   }
 
                   previewView = PreviewView(this).apply {
-                      implementationMode =
-                          PreviewView.ImplementationMode.COMPATIBLE
+                      implementationMode = PreviewView.ImplementationMode.COMPATIBLE
                   }
 
                   root.addView(
@@ -225,7 +223,8 @@ jobs:
                   )
 
                   val zoom = SeekBar(this).apply {
-                      max = 30
+                      max = 50
+                      progress = 0
                   }
 
                   root.addView(zoom)
@@ -247,13 +246,17 @@ jobs:
                       )
                   }
 
+                  addButton("MODE") {
+                      toggleCameraMode()
+                  }
+
                   addButton("FLASH") {
                       flash = !flash
                       camera?.cameraControl?.enableTorch(flash)
-
                       capture?.flashMode =
                           if (flash) ImageCapture.FLASH_MODE_ON
                           else ImageCapture.FLASH_MODE_OFF
+                      toast(if (flash) "Flash ON" else "Flash OFF")
                   }
 
                   addButton("FLIP") {
@@ -278,18 +281,13 @@ jobs:
                               user: Boolean
                           ) {
                               val ratio = 1f +
-                                  (maxZoom - 1f) * progress / 30f
+                                  (maxZoom - 1f) * (progress.toFloat() / 50f)
 
                               camera?.cameraControl?.setZoomRatio(ratio)
                           }
 
-                          override fun onStartTrackingTouch(
-                              bar: SeekBar?
-                          ) {}
-
-                          override fun onStopTrackingTouch(
-                              bar: SeekBar?
-                          ) {}
+                          override fun onStartTrackingTouch(bar: SeekBar?) {}
+                          override fun onStopTrackingTouch(bar: SeekBar?) {}
                       }
                   )
 
@@ -328,13 +326,29 @@ jobs:
                   }
               }
 
+              private fun toggleCameraMode() {
+                  currentMode = when (currentMode) {
+                      ExtensionMode.NONE -> {
+                          toast("HDR Mode Enabled (Rich DSLR Colors)")
+                          ExtensionMode.HDR
+                      }
+                      ExtensionMode.HDR -> {
+                          toast("Night Mode Enabled (Low Light Boost)")
+                          ExtensionMode.NIGHT
+                      }
+                      else -> {
+                          toast("Standard Pro Mode")
+                          ExtensionMode.NONE
+                      }
+                  }
+                  startCamera()
+              }
+
               private fun startCamera() {
-                  val future =
-                      ProcessCameraProvider.getInstance(this)
+                  val future = ProcessCameraProvider.getInstance(this)
 
                   future.addListener({
-
-                      val provider = future.get()
+                      cameraProvider = future.get()
 
                       val selector = if (front) {
                           CameraSelector.DEFAULT_FRONT_CAMERA
@@ -342,39 +356,43 @@ jobs:
                           CameraSelector.DEFAULT_BACK_CAMERA
                       }
 
-                      if (!provider.hasCamera(selector)) {
-                          toast("Camera unavailable")
-                          return@addListener
-                      }
+                      val extensionsManagerFuture =
+                          ExtensionsManager.getInstanceAsync(this, cameraProvider!!)
 
-                      val preview = Preview.Builder().build()
+                      extensionsManagerFuture.addListener({
+                          val extensionsManager = extensionsManagerFuture.get()
 
-                      preview.setSurfaceProvider(
-                          previewView.surfaceProvider
-                      )
+                          val finalSelector = if (extensionsManager.isExtensionAvailable(selector, currentMode)) {
+                              extensionsManager.getExtensionEnabledCameraSelector(selector, currentMode)
+                          } else {
+                              selector
+                          }
 
-                      capture = ImageCapture.Builder()
-                          .setCaptureMode(
-                              ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY
-                          )
-                          .build()
+                          try {
+                              cameraProvider?.unbindAll()
 
-                      try {
-                          provider.unbindAll()
+                              val preview = Preview.Builder().build()
+                              preview.setSurfaceProvider(previewView.surfaceProvider)
 
-                          camera = provider.bindToLifecycle(
-                              this,
-                              selector,
-                              preview,
-                              capture
-                          )
+                              capture = ImageCapture.Builder()
+                                  .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
+                                  .setJpegQuality(100) // Maximum picture quality
+                                  .build()
 
-                          maxZoom = camera?.cameraInfo
-                              ?.zoomState?.value?.maxZoomRatio ?: 1f
+                              camera = cameraProvider?.bindToLifecycle(
+                                  this,
+                                  finalSelector,
+                                  preview,
+                                  capture
+                              )
 
-                      } catch (e: Exception) {
-                          toast("Camera error: ${e.message}")
-                      }
+                              maxZoom = camera?.cameraInfo
+                                  ?.zoomState?.value?.maxZoomRatio ?: 1f
+
+                          } else (e: Exception) {} catch (e: Exception) {
+                              toast("Camera error: ${e.message}")
+                          }
+                      }, ContextCompat.getMainExecutor(this))
 
                   }, ContextCompat.getMainExecutor(this))
               }
@@ -382,27 +400,16 @@ jobs:
               private fun takePhoto() {
                   val image = capture ?: return
 
-                  val filename = "VivoCam_" +
+                  val filename = "VivoCamPro_" +
                       SimpleDateFormat(
                           "yyyyMMdd_HHmmss",
                           Locale.US
                       ).format(System.currentTimeMillis()) + ".jpg"
 
                   val values = ContentValues().apply {
-                      put(
-                          MediaStore.MediaColumns.DISPLAY_NAME,
-                          filename
-                      )
-
-                      put(
-                          MediaStore.MediaColumns.MIME_TYPE,
-                          "image/jpeg"
-                      )
-
-                      put(
-                          MediaStore.Images.Media.RELATIVE_PATH,
-                          "Pictures/VivoCamPro"
-                      )
+                      put(MediaStore.MediaColumns.DISPLAY_NAME, filename)
+                      put(MediaStore.MediaColumns.MIME_TYPE, "image/jpeg")
+                      put(MediaStore.Images.Media.RELATIVE_PATH, "Pictures/VivoCamPro")
                   }
 
                   val options =
@@ -421,7 +428,7 @@ jobs:
                           override fun onImageSaved(
                               result: ImageCapture.OutputFileResults
                           ) {
-                              toast("Photo saved successfully")
+                              toast("DSLR Quality Photo Saved!")
                           }
 
                           override fun onError(
