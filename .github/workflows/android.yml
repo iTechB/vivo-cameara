@@ -376,7 +376,7 @@ jobs:
 
                               capture = ImageCapture.Builder()
                                   .setCaptureMode(ImageCapture.CAPTURE_MODE_MAXIMIZE_QUALITY)
-                                  .setJpegQuality(100) // Maximum picture quality
+                                  .setJpegQuality(100)
                                   .build()
 
                               camera = cameraProvider?.bindToLifecycle(
@@ -389,7 +389,7 @@ jobs:
                               maxZoom = camera?.cameraInfo
                                   ?.zoomState?.value?.maxZoomRatio ?: 1f
 
-                          } else (e: Exception) {} catch (e: Exception) {
+                          } catch (e: Exception) {
                               toast("Camera error: ${e.message}")
                           }
                       }, ContextCompat.getMainExecutor(this))
@@ -451,7 +451,7 @@ jobs:
           EOF
 
       - name: Build APK
-        run: gradle assembleDebug
+        runs: gradle assembleDebug
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
